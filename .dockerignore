@@ -1,0 +1,6 @@
+bubble-trace/node_modules
+bubble-trace/.next
+bubble-trace/.git
+bubble-trace/README.md
+Dockerfile
+.dockerignore
