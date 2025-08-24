@@ -17,8 +17,9 @@ export default function Home() {
   });
   
   const [filters, setFilters] = useState({
-    parentFilter: '',
-    statusFilter: ''
+    parentFilter: [] as number[],
+    childFilter: [] as number[],
+    statusFilter: [] as string[]
   });
   
   const [isLoading, setIsLoading] = useState(true);
@@ -48,7 +49,7 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col">
+    <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
       <div className="flex-shrink-0 p-6">
         <div className="max-w-7xl mx-auto">
           <h1 className="text-3xl font-bold text-orange-500 mb-6 font-mono tracking-wider">
@@ -57,14 +58,15 @@ export default function Home() {
           
           <FilterPanel
             parentRequirements={data.parentRequirements}
+            childRequirements={data.childRequirements}
             filters={filters}
             onFiltersChange={setFilters}
           />
         </div>
       </div>
       
-      <div className="flex-1 px-6 pb-6">
-        <div className="max-w-7xl mx-auto h-full">
+      <div className="flex-1 px-6 pb-6 overflow-hidden">
+        <div className="w-full h-full">
           <D3BubbleMap
             parentRequirements={data.parentRequirements}
             childRequirements={data.childRequirements}

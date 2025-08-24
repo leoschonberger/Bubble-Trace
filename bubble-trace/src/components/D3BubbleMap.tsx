@@ -9,8 +9,9 @@ interface D3BubbleMapProps {
   childRequirements: ChildRequirement[];
   testRuns: TestRun[];
   filters: {
-    parentFilter: string;
-    statusFilter: string;
+    parentFilter: number[];
+    childFilter: number[];
+    statusFilter: string[];
   };
 }
 
@@ -44,8 +45,10 @@ export default function D3BubbleMap({
   filters 
 }: D3BubbleMapProps) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const simulationRef = useRef<d3.Simulation<D3Node, D3Link> | null>(null);
   
+  const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [bubbleDetails, setBubbleDetails] = useState<BubbleDetails>({ 
     node: {} as D3Node, 
     x: 0, 
@@ -57,27 +60,53 @@ export default function D3BubbleMap({
     const svg = d3.select(svgRef.current);
     const container = svg.select<SVGGElement>('.container');
     
-    container.selectAll('.node-group').select('circle')
-      .attr('stroke', '#1A1A1A')
-      .attr('stroke-width', 2)
-      .style('filter', 'url(#te-shadow)');
+    container.selectAll<SVGGElement, D3Node>('.node-group').each(function(d) {
+      const nodeGroup = d3.select(this);
+      const shape = d.type === 'test' ? nodeGroup.select('rect') : nodeGroup.select('circle');
+      shape.attr('stroke', '#1A1A1A')
+        .attr('stroke-width', 2)
+        .style('filter', 'url(#te-shadow)');
+    });
   }, []);
 
-  const width = 800;
-  const height = 600;
+  // Update dimensions when container resizes
+  useEffect(() => {
+    const updateDimensions = () => {
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        setDimensions({
+          width: Math.max(800, rect.width),
+          height: Math.max(600, rect.height)
+        });
+      }
+    };
+
+    updateDimensions();
+    const resizeObserver = new ResizeObserver(updateDimensions);
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, []);
+
+  const { width, height } = dimensions;
 
   const processData = useCallback(() => {
-    // Filter data based on filters
+    // Filter data based on multi-select filters
     const filteredParents = parentRequirements.filter(p => 
-      !filters.parentFilter || p.name.toLowerCase().includes(filters.parentFilter.toLowerCase())
+      filters.parentFilter.length === 0 || filters.parentFilter.includes(p.id)
     );
 
     const filteredChildren = childRequirements.filter(c => 
+      (filters.childFilter.length === 0 || filters.childFilter.includes(c.id)) &&
       filteredParents.some(p => p.id === c.parent_requirement_id)
     );
 
     const filteredTests = testRuns.filter(t => 
-      (!filters.statusFilter || t.status === filters.statusFilter) &&
+      (filters.statusFilter.length === 0 || filters.statusFilter.includes(t.status)) &&
       filteredChildren.some(c => c.id === t.child_requirement_id)
     );
 
@@ -117,47 +146,37 @@ export default function D3BubbleMap({
       parentChildTestGroups.push({ parent, children });
     });
 
-    // Calculate positions with tests in simple vertical line
-    const parentSpacing = Math.max(120, height / (filteredParents.length + 1));
+    // Calculate positions with tests in simple vertical line with proper spacing
+    const testRadius = 18;
+    const minTestGap = 10; // Minimum gap between test nodes
+    const testSpacing = Math.max(
+      (testRadius * 2) + minTestGap, // Minimum spacing to avoid overlap
+      height / (filteredTests.length + 1) // Even distribution across height
+    );
     const childSpacing = Math.max(80, height / (filteredChildren.length + 1));
-    const testSpacing = Math.max(50, height / (filteredTests.length + 1));
 
-    // Position parent nodes in left column
+    // Position parent nodes based on their test distribution
     let childIndex = 0;
     let testIndex = 0;
     
     parentChildTestGroups.forEach((group, groupIndex) => {
-      const parentY = (groupIndex + 1) * parentSpacing;
-      
-      nodes.push({
-        id: `parent-${group.parent.id}`,
-        type: 'parent',
-        name: group.parent.name,
-        radius: 45,
-        color: teColors.accent1,
-        data: group.parent,
-        group: 1,
-        x: width * 0.12,
-        y: parentY
-      });
+      // Calculate parent Y position based on the center of its test cases
+      const groupTestCount = group.children.reduce((sum, child) => sum + child.tests.length, 0);
+      const firstTestIndex = testIndex;
+      const lastTestIndex = testIndex + groupTestCount - 1;
+      const parentY = groupTestCount > 0 ? 
+        ((firstTestIndex + lastTestIndex + 2) / 2) * testSpacing :
+        (groupIndex + 1) * (height / (filteredParents.length + 1));
 
-      // Position child nodes in center column - simple vertical sequence
+      // Position child nodes in center column - centered with their test cases
       group.children.forEach((childGroup) => {
-        const childY = (childIndex + 1) * childSpacing;
-        
-        nodes.push({
-          id: `child-${childGroup.child.id}`,
-          type: 'child',
-          name: childGroup.child.name,
-          radius: 30,
-          color: teColors.accent2,
-          data: childGroup.child,
-          group: 2,
-          x: width * 0.45,
-          y: childY
-        });
-        
-        childIndex++;
+        // Calculate child Y position based on the center of its test cases
+        const childTestCount = childGroup.tests.length;
+        const firstChildTestIndex = testIndex;
+        const lastChildTestIndex = testIndex + childTestCount - 1;
+        const childY = childTestCount > 0 ? 
+          ((firstChildTestIndex + lastChildTestIndex + 2) / 2) * testSpacing :
+          (childIndex + 1) * childSpacing;
 
         // Position test nodes in right column - simple vertical sequence
         childGroup.tests.forEach((test) => {
@@ -175,12 +194,42 @@ export default function D3BubbleMap({
             color,
             data: test,
             group: 3,
-            x: width * 0.78,
-            y: testY
+            x: width * 0.85, // Move further right for more spacing
+            y: testY,
+            fx: width * 0.85, // Fix X position - won't move
+            fy: testY         // Fix Y position - won't move
           });
           
           testIndex++;
         });
+
+        // Add child node after calculating test positions
+        nodes.push({
+          id: `child-${childGroup.child.id}`,
+          type: 'child',
+          name: childGroup.child.name,
+          radius: 30,
+          color: teColors.accent5,
+          data: childGroup.child,
+          group: 2,
+          x: width * 0.45,
+          y: childY
+        });
+        
+        childIndex++;
+      });
+
+      // Add parent node after calculating test positions
+      nodes.push({
+        id: `parent-${group.parent.id}`,
+        type: 'parent',
+        name: group.parent.name,
+        radius: 45,
+        color: teColors.accent1,
+        data: group.parent,
+        group: 1,
+        x: width * 0.12,
+        y: parentY
       });
     });
 
@@ -209,9 +258,22 @@ export default function D3BubbleMap({
   }, [parentRequirements, childRequirements, testRuns, filters]);
 
 
-  const truncateText = (text: string, maxLength: number): string => {
-    if (text.length <= maxLength) return text;
-    return text.substring(0, maxLength - 2) + '...';
+  const getTextContent = (name: string, radius: number, zoomLevel: number = 1): string => {
+    // Return full name in uppercase without truncation
+    return name.toUpperCase();
+  };
+
+  const calculateRectSize = (text: string, baseFontSize: number) => {
+    // Calculate optimal rectangle size for text
+    const padding = 16; // Horizontal and vertical padding
+    const charWidth = baseFontSize * 0.6; // Approximate character width for monospace
+    const lineHeight = baseFontSize * 1.2;
+    
+    const textWidth = text.length * charWidth;
+    const width = textWidth + padding;
+    const height = lineHeight + (padding * 0.75); // Less vertical padding
+    
+    return { width, height };
   };
 
   useEffect(() => {
@@ -252,16 +314,69 @@ export default function D3BubbleMap({
       .on('zoom', (event) => {
         container.attr('transform', event.transform);
         
-        // Update text size based on zoom level
+        // Update text size based on zoom level (text content stays the same - full names)
         container.selectAll('text')
           .attr('font-size', function() {
             const d = d3.select(this).datum() as D3Node;
-            return Math.max(6, (d.radius * 0.32) / Math.sqrt(event.transform.k));
+            const zoomAdjustedRadius = d.radius / Math.sqrt(event.transform.k);
+            const baseSize = Math.max(6, zoomAdjustedRadius * 0.32);
+            
+            if (d.type === 'test') {
+              // Test rectangles are sized to fit, so just scale with zoom
+              return baseSize;
+            } else {
+              // For circles, still need to fit text within the circle
+              const textLength = d.name.length;
+              const availableWidth = zoomAdjustedRadius * 1.6;
+              const charWidth = baseSize * 0.6;
+              const maxCharsPerLine = Math.floor(availableWidth / charWidth);
+              
+              if (textLength > maxCharsPerLine) {
+                const widthScale = maxCharsPerLine / textLength;
+                return Math.max(5, baseSize * widthScale);
+              }
+              return baseSize;
+            }
           });
       });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (svg as any).call(zoom);
+
+    // Set initial viewport to show entire graph centered and zoomed out
+    if (nodes.length > 0) {
+      // Calculate actual bounds of all nodes including their radii
+      const xExtent = d3.extent(nodes, d => d.x!) as [number, number];
+      const yExtent = d3.extent(nodes, d => d.y!) as [number, number];
+      
+      // Add padding around the graph (more generous padding)
+      const padding = 150;
+      const graphWidth = (xExtent[1] - xExtent[0]) + (2 * padding);
+      const graphHeight = (yExtent[1] - yExtent[0]) + (2 * padding);
+      
+      // Calculate scale to fit entire graph with margin (more zoom out)
+      const scaleX = width / graphWidth;
+      const scaleY = height / graphHeight;
+      const initialScale = Math.min(scaleX, scaleY, 0.6); // Cap at 0.6 for more zoom out
+      
+      // Calculate centering translation - ensure graph bounds fit in viewport
+      const scaledGraphWidth = graphWidth * initialScale;
+      const scaledGraphHeight = graphHeight * initialScale;
+      
+      const graphLeft = xExtent[0] - padding;
+      const graphTop = yExtent[0] - padding;
+      
+      const translateX = (width - scaledGraphWidth) / 2 - (graphLeft * initialScale);
+      const translateY = (height - scaledGraphHeight) / 2 - (graphTop * initialScale);
+      
+      const initialTransform = d3.zoomIdentity
+        .translate(translateX, translateY)
+        .scale(initialScale);
+        
+      if (svgRef.current) {
+        d3.select(svgRef.current).call(zoom.transform, initialTransform);
+      }
+    }
 
     // Initialize simulation with minimal forces to maintain horizontal layout
     const simulation = d3.forceSimulation<D3Node>(nodes)
@@ -274,18 +389,18 @@ export default function D3BubbleMap({
         })
         .strength(0.1))
       .force('collision', d3.forceCollide<D3Node>()
-        .radius(d => (d as D3Node).radius + 8)
-        .strength(0.6))
+        .radius(d => (d as D3Node).radius + (d.type === 'test' ? 0 : 8))
+        .strength(0.1))
       .force('x', d3.forceX<D3Node>().x(d => {
-        // Strong force to keep nodes in their designated columns
+        // Very strong force to keep test nodes in exact single file line
         if (d.type === 'parent') return width * 0.12;
         if (d.type === 'child') return width * 0.45;
-        return width * 0.78; // tests
-      }).strength(0.9))
+        return width * 0.85; // tests - must be exact
+      }).strength(d => d.type === 'test' ? 0.99 : 0.9))
       .force('y', d3.forceY<D3Node>().y(d => {
-        // Maintain the calculated horizontal alignment
+        // Very strong force for tests to maintain vertical line, weaker for others
         return d.y!;
-      }).strength(0.7));
+      }).strength(d => d.type === 'test' ? 0.98 : 0.7));
 
     simulationRef.current = simulation;
 
@@ -311,33 +426,89 @@ export default function D3BubbleMap({
       .attr('class', 'node-group')
       .style('cursor', 'pointer');
 
-    // Add flat circles - TE style: no gradients, flat colors
-    node.append('circle')
-      .attr('r', d => d.radius)
-      .attr('fill', d => d.color)
-      .attr('stroke', '#1A1A1A')
-      .attr('stroke-width', 2)
-      .style('filter', 'url(#te-shadow)');
+    // Add shapes - circles for parent/child, rectangles for tests
+    node.each(function(d) {
+      const nodeGroup = d3.select(this);
+      
+      if (d.type === 'test') {
+        // Rectangle for test nodes - dynamically sized to fit text
+        const baseFontSize = Math.max(9, d.radius * 0.32);
+        const rectSize = calculateRectSize(d.name.toUpperCase(), baseFontSize);
+        
+        nodeGroup.append('rect')
+          .attr('width', rectSize.width)
+          .attr('height', rectSize.height)
+          .attr('x', 0) // Left align the rectangle
+          .attr('y', -rectSize.height / 2)
+          .attr('rx', 4) // Rounded corners
+          .attr('ry', 4)
+          .attr('fill', d.color)
+          .attr('stroke', '#1A1A1A')
+          .attr('stroke-width', 2)
+          .style('filter', 'url(#te-shadow)');
+      } else {
+        // Circle for parent/child nodes
+        nodeGroup.append('circle')
+          .attr('r', d.radius)
+          .attr('fill', d.color)
+          .attr('stroke', '#1A1A1A')
+          .attr('stroke-width', 2)
+          .style('filter', 'url(#te-shadow)');
+      }
+    });
 
     // Add clean text - TE style typography with zoom-responsive sizing
     node.append('text')
-      .attr('text-anchor', 'middle')
+      .attr('text-anchor', d => d.type === 'test' ? 'start' : 'middle') // Left align for rectangles
       .attr('dominant-baseline', 'middle')
+      .attr('x', d => {
+        if (d.type === 'test') {
+          // Position text with padding from left edge of rectangle
+          return 8; // 8px padding from left edge
+        }
+        return 0; // Centered for circles
+      })
       .attr('font-family', 'ui-monospace, "Menlo", "Monaco", "Cascadia Code", monospace')
       .attr('font-weight', '500')
-      .attr('font-size', d => Math.max(9, d.radius * 0.32))
+      .attr('font-size', d => {
+        const baseSize = Math.max(9, d.radius * 0.32);
+        
+        if (d.type === 'test') {
+          // Test rectangles are sized to fit text, so use consistent font size
+          return baseSize;
+        } else {
+          // For circles, still need to fit text within the circle
+          const textLength = d.name.length;
+          const availableWidth = d.radius * 1.6; // Diameter minus padding
+          const charWidth = baseSize * 0.6; // Approximate character width
+          const maxCharsPerLine = Math.floor(availableWidth / charWidth);
+          
+          if (textLength > maxCharsPerLine) {
+            const widthScale = maxCharsPerLine / textLength;
+            return Math.max(7, baseSize * widthScale);
+          }
+          return baseSize;
+        }
+      })
       .attr('fill', '#1A1A1A')
       .style('pointer-events', 'none')
       .style('letter-spacing', '0.02em')
-      .text(d => truncateText(d.name.toUpperCase(), Math.max(4, Math.floor(d.radius / 4))));
+      .text(d => getTextContent(d.name, d.radius));
 
     // Add minimal hover effects - TE style
     node.on('mouseenter', function(event, d) {
-      d3.select(this).select('circle')
-        .transition()
-        .duration(150)
-        .attr('stroke-width', 3)
-        .attr('r', d.radius * 1.05);
+      if (d.type === 'test') {
+        d3.select(this).select('rect')
+          .transition()
+          .duration(150)
+          .attr('stroke-width', 3);
+      } else {
+        d3.select(this).select('circle')
+          .transition()
+          .duration(150)
+          .attr('stroke-width', 3)
+          .attr('r', d.radius * 1.05);
+      }
       
       d3.select(this).select('text')
         .transition()
@@ -345,11 +516,18 @@ export default function D3BubbleMap({
         .attr('font-weight', '600');
     })
     .on('mouseleave', function(event, d) {
-      d3.select(this).select('circle')
-        .transition()
-        .duration(150)
-        .attr('stroke-width', 2)
-        .attr('r', d.radius);
+      if (d.type === 'test') {
+        d3.select(this).select('rect')
+          .transition()
+          .duration(150)
+          .attr('stroke-width', 2);
+      } else {
+        d3.select(this).select('circle')
+          .transition()
+          .duration(150)
+          .attr('stroke-width', 2)
+          .attr('r', d.radius);
+      }
       
       d3.select(this).select('text')
         .transition()
@@ -362,14 +540,19 @@ export default function D3BubbleMap({
       event.stopPropagation();
       
       // Remove previous selection styling
-      container.selectAll('.node-group').select('circle')
-        .attr('stroke', '#1A1A1A')
-        .attr('stroke-width', 2)
-        .style('filter', 'url(#te-shadow)');
+      container.selectAll<SVGGElement, D3Node>('.node-group').each(function(nodeData) {
+        const nodeGroup = d3.select(this);
+        const shape = nodeData.type === 'test' ? nodeGroup.select('rect') : nodeGroup.select('circle');
+        shape.attr('stroke', '#1A1A1A')
+          .attr('stroke-width', 2)
+          .style('filter', 'url(#te-shadow)');
+      });
       
       // Add selection styling to clicked node
-      d3.select(this).select('circle')
-        .attr('stroke', '#FFE066')
+      const shape = d.type === 'test' ? 
+        d3.select(this).select('rect') : 
+        d3.select(this).select('circle');
+      shape.attr('stroke', '#FFE066')
         .attr('stroke-width', 4)
         .style('filter', 'url(#te-shadow) brightness(1.1)');
       
@@ -435,11 +618,15 @@ export default function D3BubbleMap({
   }, [processData, width, height, clearSelection]);
 
   return (
-    <div className="relative w-full h-full bg-gray-50 rounded-none border-2 border-gray-900 overflow-hidden">
+    <div 
+      ref={containerRef}
+      className="relative w-full h-full bg-gray-50 rounded-none border-2 border-gray-900 overflow-hidden"
+    >
       <svg
         ref={svgRef}
         className="w-full h-full bg-white"
-        style={{ minHeight: '600px' }}
+        width={width}
+        height={height}
       />
       
       {/* TE-Style Details Panel */}
