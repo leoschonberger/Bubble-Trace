@@ -255,10 +255,10 @@ export default function D3BubbleMap({
     });
 
     return { nodes, links };
-  }, [parentRequirements, childRequirements, testRuns, filters]);
+  }, [parentRequirements, childRequirements, testRuns, filters, width, height]);
 
 
-  const getTextContent = (name: string, radius: number, zoomLevel: number = 1): string => {
+  const getTextContent = (name: string): string => {
     // Return full name in uppercase without truncation
     return name.toUpperCase();
   };
@@ -378,7 +378,7 @@ export default function D3BubbleMap({
       }
     }
 
-    // Initialize simulation with minimal forces to maintain horizontal layout
+    // Initialize simulation with no movement - fix all nodes in place
     const simulation = d3.forceSimulation<D3Node>(nodes)
       .force('link', d3.forceLink<D3Node, D3Link>(links)
         .id(d => d.id)
@@ -387,20 +387,12 @@ export default function D3BubbleMap({
           const targetRadius = (d.target as D3Node).radius;
           return sourceRadius + targetRadius + 60;
         })
-        .strength(0.1))
-      .force('collision', d3.forceCollide<D3Node>()
-        .radius(d => (d as D3Node).radius + (d.type === 'test' ? 0 : 8))
-        .strength(0.1))
-      .force('x', d3.forceX<D3Node>().x(d => {
-        // Very strong force to keep test nodes in exact single file line
-        if (d.type === 'parent') return width * 0.12;
-        if (d.type === 'child') return width * 0.45;
-        return width * 0.85; // tests - must be exact
-      }).strength(d => d.type === 'test' ? 0.99 : 0.9))
-      .force('y', d3.forceY<D3Node>().y(d => {
-        // Very strong force for tests to maintain vertical line, weaker for others
-        return d.y!;
-      }).strength(d => d.type === 'test' ? 0.98 : 0.7));
+        .strength(0)) // No link force to prevent movement
+      .force('collision', null) // No collision detection to prevent movement
+      .force('x', null) // No X force
+      .force('y', null) // No Y force
+      .alpha(0) // Set alpha to 0 to stop simulation immediately
+      .stop(); // Stop the simulation completely
 
     simulationRef.current = simulation;
 
@@ -493,7 +485,7 @@ export default function D3BubbleMap({
       .attr('fill', '#1A1A1A')
       .style('pointer-events', 'none')
       .style('letter-spacing', '0.02em')
-      .text(d => getTextContent(d.name, d.radius));
+      .text(d => getTextContent(d.name));
 
     // Add minimal hover effects - TE style
     node.on('mouseenter', function(event, d) {
@@ -582,35 +574,17 @@ export default function D3BubbleMap({
       setBubbleDetails(prev => ({ ...prev, visible: false }));
     });
 
-    // Add drag behavior
-    const drag = d3.drag<SVGGElement, D3Node>()
-      .on('start', (event, d) => {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        d.fx = d.x;
-        d.fy = d.y;
-      })
-      .on('drag', (event, d) => {
-        d.fx = event.x;
-        d.fy = event.y;
-      })
-      .on('end', (event, d) => {
-        if (!event.active) simulation.alphaTarget(0);
-        d.fx = null;
-        d.fy = null;
-      });
+    // Remove drag behavior - bubbles should not move
+    // node.call(drag); // Commented out to prevent dragging
 
-    node.call(drag);
+    // Update positions immediately (no animation since simulation is stopped)
+    link
+      .attr('x1', d => (d.source as D3Node).x!)
+      .attr('y1', d => (d.source as D3Node).y!)
+      .attr('x2', d => (d.target as D3Node).x!)
+      .attr('y2', d => (d.target as D3Node).y!);
 
-    // Update positions on simulation tick
-    simulation.on('tick', () => {
-      link
-        .attr('x1', d => (d.source as D3Node).x!)
-        .attr('y1', d => (d.source as D3Node).y!)
-        .attr('x2', d => (d.target as D3Node).x!)
-        .attr('y2', d => (d.target as D3Node).y!);
-
-      node.attr('transform', d => `translate(${d.x},${d.y})`);
-    });
+    node.attr('transform', d => `translate(${d.x},${d.y})`);
 
     return () => {
       simulation.stop();
@@ -715,7 +689,6 @@ export default function D3BubbleMap({
           <div>⚲ <span className="font-medium uppercase">SCROLL</span> → ZOOM</div>
           <div>✋ <span className="font-medium uppercase">DRAG</span> → PAN</div>
           <div>👆 <span className="font-medium uppercase">CLICK</span> → INFO</div>
-          <div>🔄 <span className="font-medium uppercase">DRAG BUBBLE</span> → MOVE</div>
         </div>
       </div>
     </div>
